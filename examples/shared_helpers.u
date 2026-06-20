@@ -1,0 +1,28 @@
+-- examples/shared_helpers.u
+-- Helpers that own their own failure responses.
+-- They carry {Route.Done} in their type so callers don't need
+-- to wrap them in any special way — just call them.
+
+-- Reusable coin existence check
+ensureCoinExists : Text ->{Route.Done, Knowledge} Coin
+ensureCoinExists coinId =
+  Route.requireFound
+    (Knowledge.getCoin coinId)
+    ("Coin not found: " ++ coinId)
+
+-- Reusable auth extraction
+requireAdmin : Request ->{Route.Done, Auth} User
+requireAdmin req =
+  token = Route.require (Request.header req "Authorization") "Missing token"
+  Route.guard.unauthorized (not (Auth.verify token)) "Invalid token"
+  user  = Auth.userFromToken token
+  Route.guard.forbidden (not (Auth.isAdmin user)) "Admin required"
+  user
+
+-- Usage: helpers compose naturally — no Abort, no special wiring
+example.adminCoinRoute : Request ->{Route.Done, Auth, Knowledge} HttpResponse
+example.adminCoinRoute req =
+  _admin  = requireAdmin req
+  coinId = Route.require (Request.queryParam req "coin") "Missing coin param"
+  coin   = ensureCoinExists coinId
+  Route.ok coin.summary

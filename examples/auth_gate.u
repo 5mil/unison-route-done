@@ -1,0 +1,25 @@
+-- examples/auth_gate.u
+-- Auth enforcement via Route.guard
+
+example.authHandler : Request ->{Route.Done, Auth, Knowledge} HttpResponse
+example.authHandler req =
+  token = Route.require (Request.header req "Authorization") "Missing Authorization header"
+
+  -- Guard exits with 401 if the token is invalid
+  Route.guard.unauthorized
+    (not (Auth.verify token))
+    "Invalid or expired token"
+
+  -- Guard exits with 403 if the role is insufficient
+  user  = Auth.userFromToken token
+  Route.guard.forbidden
+    (not (Auth.canRead user))
+    "Insufficient permissions"
+
+  -- Happy path
+  data = Knowledge.getAll
+  Route.okJson data
+
+example.authDispatch : Request ->{Auth, Knowledge, IO} HttpResponse
+example.authDispatch req =
+  Route.handle do example.authHandler req

@@ -1,0 +1,166 @@
+-- Route.u
+-- unison-route-done
+--
+-- A typed early-exit layer for Unison route handlers.
+-- Uses the Route.Done algebraic ability to commit a response and stop
+-- handler execution at the call site, without threading Abort through
+-- every function on the stack.
+--
+-- See README.md and USAGE.md for full documentation.
+
+
+-- ---------------------------------------------------------------------------
+-- The core ability
+-- ---------------------------------------------------------------------------
+
+-- structural: no meaningful identity beyond its structure.
+-- Avoids hash-mismatch issues when the library is upgraded.
+structural ability Route.Done where
+  -- done : commit `response` and exit the handler.
+  -- The return type `r` is universally polymorphic — it never produces a
+  -- value to the continuation, so it typechecks in any position (match
+  -- arm, if branch, sequential position, etc.).
+  done : response ->{Route.Done} r
+
+
+-- ---------------------------------------------------------------------------
+-- Runner
+-- ---------------------------------------------------------------------------
+
+-- Route.handle : execute a handler thunk.
+--
+-- If the thunk calls Route.Done.done, execution stops at that point and
+-- the committed response is returned. If the thunk runs to completion
+-- without calling done, its normal return value is returned.
+--
+-- The `e` row passes all other abilities (Auth, Knowledge, Vault, IO, etc.)
+-- through untouched. Route.handle is the ONLY place Route.Done is consumed;
+-- every callee on the stack just carries {Route.Done} in its type row.
+Route.handle : '{Route.Done, e} response ->{e} response
+Route.handle thunk =
+  handle !thunk with
+    { value }                       -> value
+    { Route.Done.done response -> _k } -> response
+
+
+-- ---------------------------------------------------------------------------
+-- HttpResponse type
+-- ---------------------------------------------------------------------------
+
+-- A minimal HTTP response. Keep it simple so the library is not tied to
+-- any specific HTTP framework. Consumers can wrap or extend this type.
+unique type HttpResponse = HttpResponse
+  { status  : Nat
+  , body    : Text
+  , headers : [(Text, Text)]
+  }
+
+HttpResponse.make : Nat -> Text -> HttpResponse
+HttpResponse.make s b = HttpResponse s b []
+
+HttpResponse.withHeader : Text -> Text -> HttpResponse -> HttpResponse
+HttpResponse.withHeader k v (HttpResponse s b hs) =
+  HttpResponse s b ((k, v) +: hs)
+
+
+-- ---------------------------------------------------------------------------
+-- Core respond primitive
+-- ---------------------------------------------------------------------------
+
+-- Commit a raw status + body response and exit immediately.
+-- Return type `r` is polymorphic so this composes in any branch.
+Route.respond : Nat -> Text ->{Route.Done} r
+Route.respond status body =
+  Route.Done.done (HttpResponse.make status body)
+
+
+-- ---------------------------------------------------------------------------
+-- Standard response helpers
+-- ---------------------------------------------------------------------------
+
+Route.ok          : Text ->{Route.Done} r
+Route.badRequest  : Text ->{Route.Done} r
+Route.unauthorized: Text ->{Route.Done} r
+Route.forbidden   : Text ->{Route.Done} r
+Route.notFound    : Text ->{Route.Done} r
+Route.conflict    : Text ->{Route.Done} r
+Route.serverError : Text ->{Route.Done} r
+
+Route.ok           t = Route.respond 200 t
+Route.badRequest   t = Route.respond 400 t
+Route.unauthorized t = Route.respond 401 t
+Route.forbidden    t = Route.respond 403 t
+Route.notFound     t = Route.respond 404 t
+Route.conflict     t = Route.respond 409 t
+Route.serverError  t = Route.respond 500 t
+
+-- JSON variant — sets Content-Type automatically
+Route.okJson : Text ->{Route.Done} r
+Route.okJson body =
+  Route.Done.done
+    (HttpResponse.withHeader "Content-Type" "application/json"
+      (HttpResponse.make 200 body))
+
+
+-- ---------------------------------------------------------------------------
+-- Guard combinators
+-- ---------------------------------------------------------------------------
+
+-- Guards are the idiomatic replacement for `when ... do respond.*`.
+-- They return () on the happy path, so they compose sequentially.
+-- The early exit only fires if the condition is true.
+
+-- Exit with 400 Bad Request if condition is true.
+Route.guard.badRequest : Boolean -> Text ->{Route.Done} ()
+Route.guard.badRequest condition msg =
+  if condition then Route.Done.done (HttpResponse.make 400 msg)
+  else ()
+
+-- Exit with 401 Unauthorized if condition is true.
+Route.guard.unauthorized : Boolean -> Text ->{Route.Done} ()
+Route.guard.unauthorized condition msg =
+  if condition then Route.Done.done (HttpResponse.make 401 msg)
+  else ()
+
+-- Exit with 403 Forbidden if condition is true.
+Route.guard.forbidden : Boolean -> Text ->{Route.Done} ()
+Route.guard.forbidden condition msg =
+  if condition then Route.Done.done (HttpResponse.make 403 msg)
+  else ()
+
+-- Exit with 404 Not Found if condition is true.
+Route.guard.notFound : Boolean -> Text ->{Route.Done} ()
+Route.guard.notFound condition msg =
+  if condition then Route.Done.done (HttpResponse.make 404 msg)
+  else ()
+
+-- Exit with 409 Conflict if condition is true.
+Route.guard.conflict : Boolean -> Text ->{Route.Done} ()
+Route.guard.conflict condition msg =
+  if condition then Route.Done.done (HttpResponse.make 409 msg)
+  else ()
+
+-- Generic guard: exit with any status if condition is true.
+Route.guard : Boolean -> Nat -> Text ->{Route.Done} ()
+Route.guard condition status msg =
+  if condition then Route.Done.done (HttpResponse.make status msg)
+  else ()
+
+-- ---------------------------------------------------------------------------
+-- Optional unwrapper
+-- ---------------------------------------------------------------------------
+
+-- Unwrap an Optional, exiting with 400 if it is None.
+-- This is the most common guard pattern in practice.
+Route.require : Optional a -> Text ->{Route.Done} a
+Route.require opt msg =
+  match opt with
+    Some a -> a
+    None   -> Route.Done.done (HttpResponse.make 400 msg)
+
+-- Unwrap an Optional, exiting with 404 if it is None.
+Route.requireFound : Optional a -> Text ->{Route.Done} a
+Route.requireFound opt msg =
+  match opt with
+    Some a -> a
+    None   -> Route.Done.done (HttpResponse.make 404 msg)

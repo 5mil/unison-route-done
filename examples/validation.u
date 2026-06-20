@@ -1,0 +1,21 @@
+-- examples/validation.u
+-- Query parameter validation with Route.guard
+
+example.validationHandler : Request ->{Route.Done, Knowledge} HttpResponse
+example.validationHandler req =
+  -- Guard exits immediately with 400 if the param is absent.
+  -- Execution only continues when the param is present.
+  Route.guard.badRequest
+    (Request.queryParam req "q" |> Optional.isNone)
+    "Missing required query param: q"
+
+  q = Route.require (Request.queryParam req "q") "Missing q"
+
+  -- Only reached on the happy path
+  results = Knowledge.search q
+  Route.ok results
+
+-- Wire into a dispatcher:
+example.dispatch : Request ->{Knowledge, IO} HttpResponse
+example.dispatch req =
+  Route.handle do example.validationHandler req

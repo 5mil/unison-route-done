@@ -1,0 +1,25 @@
+-- examples/multi_step.u
+-- Multi-step handler: validate, lookup, persist, respond
+-- Each step can exit early; the remainder is unreachable by construction.
+
+example.createEntity : Request ->{Route.Done, Knowledge, Vault, Audit} HttpResponse
+example.createEntity req =
+  -- Step 1: validate inputs
+  name = Route.require (Request.bodyField req "name") "Missing name field"
+  kind = Route.require (Request.bodyField req "kind") "Missing kind field"
+
+  Route.guard.conflict
+    (Knowledge.exists name)
+    ("Entity already exists: " ++ name)
+
+  -- Step 2: persist
+  entity = Knowledge.create name kind
+  Vault.recordProvenance entity.id "created"
+  Audit.log ("entity.created:" ++ name)
+
+  -- Step 3: respond
+  Route.ok ("Created: " ++ name)
+
+example.createDispatch : Request ->{Knowledge, Vault, Audit, IO} HttpResponse
+example.createDispatch req =
+  Route.handle do example.createEntity req
